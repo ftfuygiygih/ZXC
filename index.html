@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TG Forwarder</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--card:#f4f5f7;--bd:#d8dbe0;--ac:#2a7de1;--ok:#2e9e5b;--bad:#d64545}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#e8e9ec;--card:#1e2126;--bd:#343841}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px system-ui,sans-serif;display:flex;justify-content:center;padding:24px 14px}
+.box{width:100%;max-width:440px;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:20px}
+h1{font-size:20px;margin:0 0 16px}label{display:block;font-size:13px;opacity:.7;margin:14px 0 4px}
+input,select,button{width:100%;padding:11px;border-radius:9px;border:1px solid var(--bd);background:var(--bg);color:var(--fg);font-size:16px}
+button{background:var(--ac);color:#fff;border:0;margin-top:14px;cursor:pointer}button.sec{background:transparent;color:var(--fg);border:1px solid var(--bd)}
+.row{display:flex;align-items:center;justify-content:space-between;margin-top:20px;padding:14px;border-radius:10px;border:1px solid var(--bd)}
+.sw{width:54px;height:30px;border-radius:15px;background:var(--bd);position:relative;cursor:pointer;transition:.2s;flex:none}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:.2s}
+.sw.on{background:var(--ok)}.sw.on::after{left:27px}
+#msg{margin-top:12px;min-height:20px;font-size:14px;color:var(--bad)}.hide{display:none}
+textarea{width:100%;height:90px;margin-top:8px;font-size:12px;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:9px;padding:8px}
+small{opacity:.65;display:block;margin-top:8px;line-height:1.4}
+</style></head><body><div class="box">
+<h1>Telegram Forwarder</h1>
+
+<div id="v-login" class="hide">
+  <label>Пароль от сайта</label><input id="pw" type="password" autocomplete="current-password">
+  <button onclick="doLogin()">Войти</button>
+</div>
+
+<div id="v-tg" class="hide">
+  <div id="s-phone"><label>Номер телефона (+46…)</label><input id="phone" type="tel"><button onclick="sendCode()">Получить код</button></div>
+  <div id="s-code" class="hide"><label>Код из Telegram</label><input id="code" inputmode="numeric" autocomplete="one-time-code"><button onclick="signIn()">Войти</button></div>
+  <div id="s-password" class="hide"><label>Пароль двухэтапной защиты</label><input id="tfa" type="password"><button onclick="signIn()">Войти</button></div>
+</div>
+
+<div id="v-panel" class="hide">
+  <div style="font-size:14px;opacity:.75">Аккаунт: <b id="me"></b></div>
+  <label>Откуда пересылать (группа-источник)</label><select id="src"></select>
+  <label>Куда пересылать</label><select id="tgt"></select>
+  <div class="row"><div><b id="st">Выключено</b><small style="margin:2px 0 0">Только новые сообщения с момента включения</small></div><div class="sw" id="sw" onclick="toggle()"></div></div>
+  <button class="sec" onclick="loadDialogs()">Обновить список групп</button>
+  <button class="sec" onclick="showSession()">Показать SESSION</button>
+  <div id="sess" class="hide"><textarea id="sessText" readonly></textarea>
+  <small>Добавь это в Render → Environment → <code>SESSION</code>, чтобы не вводить код после перезапуска сервиса. Никому не показывай.</small></div>
+</div>
+<div id="msg"></div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const msg=t=>$('#msg').textContent=t||'';
+function view(n){['login','tg','panel'].forEach(v=>$('#v-'+v).classList.toggle('hide',v!==n));msg()}
+async function api(p,b){
+  const r=await fetch(p,{method:b===undefined?'GET':'POST',headers:{'Content-Type':'application/json'},body:b===undefined?undefined:JSON.stringify(b)});
+  if(r.status===401){view('login');throw 0}
+  const j=await r.json();if(j.error){msg(j.error);throw 0}return j}
+async function doLogin(){await api('/api/login',{password:$('#pw').value});init()}
+function step(s){['phone','code','password'].forEach(x=>$('#s-'+x).classList.toggle('hide',x!==s));msg()}
+async function sendCode(){const j=await api('/api/send_code',{phone:$('#phone').value});step(j.step)}
+async function signIn(){
+  const body=!$('#s-password').classList.contains('hide')?{password:$('#tfa').value}:{code:$('#code').value};
+  const j=await api('/api/sign_in',body);
+  if(j.step){step(j.step)}else init()}
+let cfg={};
+function render(){
+  $('#sw').classList.toggle('on',cfg.enabled);
+  $('#st').textContent=cfg.enabled?'Включено ✅':'Выключено';}
+async function loadDialogs(){
+  const {dialogs}=await api('/api/dialogs');
+  $('#src').innerHTML='<option value="">— выбери —</option>'+dialogs.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
+  $('#tgt').innerHTML='<option value="me">⭐ Избранное</option>'+dialogs.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
+  $('#src').value=cfg.source||'';$('#tgt').value=cfg.target||'me';}
+function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+async function save(enabled){
+  const j=await api('/api/config',{source:$('#src').value,target:$('#tgt').value,enabled});
+  cfg=j.cfg;render();msg()}
+async function toggle(){try{await save(!cfg.enabled)}catch(e){}}
+['#src','#tgt'].forEach(s=>document.addEventListener('change',e=>{if(e.target.matches(s)&&cfg.enabled)save(false).catch(()=>{})}));
+async function showSession(){const j=await api('/api/session');$('#sessText').value=j.session;$('#sess').classList.remove('hide')}
+async function init(){
+  try{
+    const s=await api('/api/state');cfg=s.cfg;
+    if(!s.authorized){view('tg');step(s.step);return}
+    view('panel');$('#me').textContent=s.me;await loadDialogs();render();
+  }catch(e){}}
+init();
+</script></body></html>
